@@ -181,9 +181,9 @@ Render allows 20–100 concurrent runs depending on your workspace plan, and eve
 ### Change the Claude model
 
 ```
-CLAUDE_MODEL=claude-opus-4-20250514      # harder research tasks
+CLAUDE_MODEL=claude-opus-5               # harder research tasks
 CLAUDE_MODEL=claude-haiku-4-5-20251001   # faster, cheaper
-PLANNER_MODEL=claude-sonnet-4-20250514   # better sub-question splits
+PLANNER_MODEL=claude-sonnet-5            # better sub-question splits
 ```
 
 `PLANNER_MODEL` defaults to Haiku. Decomposition is a short, cheap call, but it sets the shape of everything downstream — worth upgrading before you upgrade `CLAUDE_MODEL`.

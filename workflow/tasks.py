@@ -152,7 +152,7 @@ Output only the report.\
 
 MAX_AGENT_TURNS = 6
 MAX_SUB_QUESTIONS = 5
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
 PLANNER_MODEL = os.getenv("PLANNER_MODEL", "claude-haiku-4-5-20251001")
 SEARCH_MODE = os.getenv("PARALLEL_SEARCH_MODE", "fast")
 
@@ -209,7 +209,7 @@ def _parse_sub_questions(text: str, fallback: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-@app.task(timeout=900)
+@app.task(timeout_seconds=900)
 async def research_agent(ctx: TaskContext, query: str) -> dict:
     """Plan a research strategy, investigate each thread in parallel, synthesize.
 
@@ -240,7 +240,7 @@ async def research_agent(ctx: TaskContext, query: str) -> dict:
     return report
 
 
-@app.task(timeout=60)
+@app.task(timeout_seconds=60)
 def plan_research(ctx: TaskContext, query: str) -> list[str]:
     """Split the question into independent, parallelizable sub-questions."""
     claude = anthropic.Anthropic()
@@ -259,7 +259,7 @@ def plan_research(ctx: TaskContext, query: str) -> list[str]:
 
 
 @app.task(
-    timeout=300,
+    timeout_seconds=300,
     retry=Retry(max_retries=3, wait_duration_ms=5000, backoff_scaling=2.0),
 )
 def investigate(ctx: TaskContext, query: str, sub_question: str) -> dict:
@@ -329,7 +329,7 @@ def investigate(ctx: TaskContext, query: str, sub_question: str) -> dict:
     }
 
 
-@app.task(timeout=120)
+@app.task(timeout_seconds=120)
 def synthesize(ctx: TaskContext, query: str, branches: list[dict]) -> dict:
     """Merge parallel branch findings into one reconciled report."""
     claude = anthropic.Anthropic()
