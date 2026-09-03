@@ -1,0 +1,33 @@
+# Render Blueprint for the Parallel Research Agent
+#
+# This creates the gateway web service only. The Workflow service must be
+# created manually in the Render Dashboard — see README.md step 4.
+
+services:
+  - type: web
+    name: parallel-research-gateway
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn gateway.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Parallel API key — get one free at https://platform.parallel.ai
+      - key: PARALLEL_API_KEY
+        sync: false
+      # Anthropic API key — https://console.anthropic.com
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Render API key — https://render.com/docs/api-keys
+      # Used by the gateway to dispatch workflow runs
+      - key: RENDER_API_KEY
+        sync: false
+      # Workflow slug — set after creating the Workflow service (step 4)
+      - key: RENDER_WORKFLOW_SLUG
+        sync: false
+      # Optional: override the default Claude model
+      # - key: CLAUDE_MODEL
+      #   value: claude-sonnet-4-20250514
+      # Optional: override the default Parallel search mode (turbo | fast | advanced)
+      # - key: PARALLEL_SEARCH_MODE
+      #   value: fast
