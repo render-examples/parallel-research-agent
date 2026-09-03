@@ -183,6 +183,48 @@ def _execute_tool(parallel: Parallel, name: str, input_data: dict) -> str:
     return f"Unknown tool: {name}"
 
 
+def _text_of(response) -> str:
+    """Concatenate the text blocks of a Claude response."""
+    return "\n".join(
+        block.text for block in response.content if block.type == "text"
+    )
+
+
+def _write_up(claude: anthropic.Anthropic, messages: list[dict]) -> str:
+    """Force a write-up from a branch that ran out of research turns.
+
+    Without this a branch that spends every turn calling tools returns empty
+    findings — it burns the budget and contributes nothing to synthesis. The
+    call omits `tools` so the only move left is to answer.
+    """
+    nudge = {
+        "type": "text",
+        "text": (
+            "You are out of research turns. Write up your findings now, "
+            "using only what you have already gathered and following your "
+            "output instructions. Do not request more tools."
+        ),
+    }
+
+    # Anthropic requires tool_result blocks to lead their message, so append
+    # the nudge to the trailing user turn rather than starting a new one.
+    last = messages[-1] if messages else None
+    if last and last["role"] == "user" and isinstance(last["content"], list):
+        messages = messages[:-1] + [
+            {"role": "user", "content": [*last["content"], nudge]}
+        ]
+    else:
+        messages = [*messages, {"role": "user", "content": [nudge]}]
+
+    response = claude.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=4096,
+        system=RESEARCH_SYSTEM_PROMPT,
+        messages=messages,
+    )
+    return _text_of(response)
+
+
 def _parse_sub_questions(text: str, fallback: str) -> list[str]:
     """Pull a JSON array of sub-questions out of the planner's reply.
 
@@ -252,10 +294,7 @@ def plan_research(ctx: TaskContext, query: str) -> list[str]:
         messages=[{"role": "user", "content": query}],
     )
 
-    text = "".join(
-        block.text for block in response.content if block.type == "text"
-    )
-    return _parse_sub_questions(text, fallback=query)
+    return _parse_sub_questions(_text_of(response), fallback=query)
 
 
 @app.task(
@@ -297,9 +336,7 @@ def investigate(ctx: TaskContext, query: str, sub_question: str) -> dict:
 
         # Claude finished — no more tool calls
         if response.stop_reason == "end_turn":
-            findings = "\n".join(
-                block.text for block in response.content if block.type == "text"
-            )
+            findings = _text_of(response)
             break
 
         messages.append({"role": "assistant", "content": response.content})
@@ -319,7 +356,17 @@ def investigate(ctx: TaskContext, query: str, sub_question: str) -> dict:
                 }
             )
 
+        # Claude stopped for some other reason (hitting max_tokens, say)
+        # without requesting a tool. Sending an empty user turn back is a
+        # 400, so stop here and let the write-up below salvage the work.
+        if not tool_results:
+            break
+
         messages.append({"role": "user", "content": tool_results})
+
+    if not findings:
+        findings = _write_up(claude, messages)
+        turns += 1
 
     return {
         "sub_question": sub_question,
@@ -355,9 +402,7 @@ def synthesize(ctx: TaskContext, query: str, branches: list[dict]) -> dict:
         ],
     )
 
-    report_text = "".join(
-        block.text for block in response.content if block.type == "text"
-    )
+    report_text = _text_of(response)
     urls = list(dict.fromkeys(re.findall(r"https?://[^\s)>\]]+", report_text)))
 
     return {
