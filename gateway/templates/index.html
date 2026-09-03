@@ -112,6 +112,72 @@
 
   .status.visible { display: block; }
 
+  .progress {
+    margin-top: 0.75rem;
+    display: none;
+  }
+
+  .progress.visible { display: block; }
+
+  .progress .phase {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-3);
+    margin-bottom: 0.5rem;
+  }
+
+  .branches {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+  }
+
+  .branch {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.5rem 0.625rem;
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-3);
+  }
+
+  .branch .dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    margin-top: 0.45rem;
+    border-radius: 50%;
+    background: var(--text-3);
+  }
+
+  .branch.running {
+    border-left-color: var(--accent);
+    color: var(--text-2, var(--text-3));
+  }
+
+  .branch.running .dot {
+    background: var(--accent);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+
+  .branch.completed { border-left-color: #3fb950; }
+  .branch.completed .dot { background: #3fb950; }
+  .branch.failed { border-left-color: #f85149; }
+  .branch.failed .dot { background: #f85149; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
   .result {
     margin-top: 1.5rem;
     display: none;
@@ -192,6 +258,8 @@
 
 <div id="status" class="status"></div>
 
+<div id="progress" class="progress"></div>
+
 <div id="result" class="result">
   <h2>Report</h2>
   <pre id="report"></pre>
@@ -210,6 +278,64 @@ function fillExample(btn) {
   document.getElementById('query').value = btn.textContent;
 }
 
+const PHASE_LABELS = {
+  starting: 'Starting up',
+  planning: 'Planning research',
+  investigating: 'Investigating in parallel',
+  synthesizing: 'Synthesizing findings',
+  completed: 'Complete',
+  failed: 'Failed',
+};
+
+// Renders the fan-out live. Every branch is its own workflow run, so this is
+// read straight off the run graph — nothing is persisted by the gateway.
+async function renderProgress(runId) {
+  const box = document.getElementById('progress');
+
+  let data;
+  try {
+    const res = await fetch('/research/' + runId + '/progress');
+    if (!res.ok) return;
+    data = await res.json();
+  } catch (e) {
+    return;
+  }
+
+  const branches = data.branches || [];
+  const done = branches.filter(b => b.status === 'completed').length;
+
+  let phase = PHASE_LABELS[data.phase] || data.phase;
+  if (data.phase === 'investigating' && branches.length) {
+    phase += ' — ' + done + ' of ' + branches.length + ' complete';
+  }
+
+  const items = branches.map(b => {
+    const li = document.createElement('li');
+    li.className = 'branch ' + b.status;
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    li.appendChild(dot);
+    li.appendChild(document.createTextNode(b.sub_question || b.run_id));
+    return li;
+  });
+
+  box.replaceChildren();
+
+  const phaseEl = document.createElement('div');
+  phaseEl.className = 'phase';
+  phaseEl.textContent = phase;
+  box.appendChild(phaseEl);
+
+  if (items.length) {
+    const ul = document.createElement('ul');
+    ul.className = 'branches';
+    items.forEach(li => ul.appendChild(li));
+    box.appendChild(ul);
+  }
+
+  box.className = 'progress visible';
+}
+
 async function startResearch() {
   const query = document.getElementById('query').value.trim();
   if (!query) return;
@@ -221,6 +347,8 @@ async function startResearch() {
   btn.disabled = true;
   status.className = 'status visible';
   resultDiv.className = 'result';
+  document.getElementById('progress').className = 'progress';
+  document.getElementById('progress').replaceChildren();
   status.textContent = 'Dispatching research run...';
 
   try {
@@ -246,6 +374,7 @@ async function startResearch() {
     const poll = setInterval(async () => {
       const elapsed = Math.round((Date.now() - start) / 1000);
       status.textContent = 'Researching... ' + elapsed + 's elapsed (run ' + runId.slice(0, 8) + ')';
+      renderProgress(runId);
 
       try {
         const check = await fetch('/research/' + runId);
@@ -254,6 +383,7 @@ async function startResearch() {
         if (run.status === 'completed' && run.result) {
           clearInterval(poll);
           status.textContent = 'Complete in ' + elapsed + 's';
+          renderProgress(runId);
 
           document.getElementById('report').textContent = run.result.report || JSON.stringify(run.result, null, 2);
 
