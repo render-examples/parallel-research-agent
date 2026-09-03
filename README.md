@@ -4,6 +4,8 @@ A durable web research agent powered by [Parallel](https://parallel.ai) Search, 
 
 Submit a research question. Claude splits it into independent sub-questions, investigates all of them at the same time against Parallel's Search and Extract APIs, and reconciles the findings into one cited report — all inside a Render Workflow that retries on failure and scales to zero when idle.
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/render-examples/parallel-research-agent)
+
 ## How it works
 
 ```
@@ -51,11 +53,13 @@ You need three API keys (all have free tiers):
 | Anthropic | [console.anthropic.com](https://console.anthropic.com) |
 | Render | [render.com/docs/api-keys](https://render.com/docs/api-keys) |
 
-### Step 1 — Fork and deploy the gateway
+### Step 1 — Deploy the gateway
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/render-examples/parallel-research-agent)
 
-Click the button, connect your fork, and enter your three API keys when prompted. Leave `RENDER_WORKFLOW_SLUG` empty for now — you'll set it in step 3.
+Click the button and enter your three API keys when prompted. Leave `RENDER_WORKFLOW_SLUG` empty for now — you'll set it in step 3.
+
+The button reads `render.yaml` from the repo, so if you want to customize the Blueprint, fork first and point the button at your fork by swapping the `repo` parameter in its URL.
 
 ### Step 2 — Create the Workflow service
 
@@ -200,7 +204,7 @@ The agent currently uses Search and Extract. Adding more tools is straightforwar
 
 ```bash
 # Clone and install
-git clone https://github.com/YOUR_ORG/parallel-research-agent.git
+git clone https://github.com/render-examples/parallel-research-agent.git
 cd parallel-research-agent
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
