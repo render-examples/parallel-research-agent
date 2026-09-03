@@ -50,27 +50,41 @@ def format_extract_results(extract_response) -> str:
     """Turn a Parallel Extract response into labeled page contents.
 
     Each extracted page becomes:
-        === Page: https://... ===
-        <content>
+        === Page: Title — https://... ===
+        <markdown excerpts>
 
-    Content is truncated to keep the context window manageable when the
-    agent extracts multiple pages in one call.
+    Extract returns `excerpts` (a list of markdown strings aligned to the
+    objective) and, only when explicitly requested, `full_content`. Prefer
+    the excerpts: they're already scoped to what the agent asked for.
     """
     sections: list[str] = []
 
-    results = getattr(extract_response, "results", [])
-    if not results:
-        results = extract_response if isinstance(extract_response, list) else []
-
-    for result in results:
+    for result in getattr(extract_response, "results", []) or []:
         url = getattr(result, "url", "unknown")
-        content = getattr(result, "content", "") or getattr(result, "text", "") or ""
+        title = getattr(result, "title", None)
+        header = f"{title} — {url}" if title else url
+
+        excerpts = getattr(result, "excerpts", None) or []
+        content = "\n\n".join(excerpts)
+        if not content:
+            content = getattr(result, "full_content", "") or ""
+
+        if not content:
+            sections.append(f"=== Page: {header} ===\n[no content returned]")
+            continue
 
         truncated = content[:MAX_EXTRACT_CHARS]
         if len(content) > MAX_EXTRACT_CHARS:
             truncated += "\n\n[... content truncated]"
 
-        sections.append(f"=== Page: {url} ===\n{truncated}")
+        sections.append(f"=== Page: {header} ===\n{truncated}")
+
+    # Per-URL failures come back in `errors` rather than raising, so surface
+    # them — otherwise the agent silently treats a dead URL as a dead end.
+    for error in getattr(extract_response, "errors", None) or []:
+        url = getattr(error, "url", "unknown")
+        message = getattr(error, "message", None) or getattr(error, "detail", "failed")
+        sections.append(f"=== Page: {url} ===\n[extraction failed: {message}]")
 
     if not sections:
         return "No content could be extracted."

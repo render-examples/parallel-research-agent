@@ -21,7 +21,7 @@ import re
 
 import anthropic
 from parallel import Parallel
-from render_sdk import Retry, Workflows
+from render import Retry, TaskContext, Workflows
 
 from shared.formatters import format_extract_results, format_search_results
 
@@ -210,16 +210,16 @@ def _parse_sub_questions(text: str, fallback: str) -> list[str]:
 
 
 @app.task(timeout=900)
-async def research_agent(query: str) -> dict:
+async def research_agent(ctx: TaskContext, query: str) -> dict:
     """Plan a research strategy, investigate each thread in parallel, synthesize.
 
     The fan-out is the point: every sub-question becomes its own workflow
     run with its own retry budget, so one failed branch costs one branch.
     """
-    sub_questions = await plan_research(query)
+    sub_questions = await ctx.run(plan_research, query)
 
     outcomes = await asyncio.gather(
-        *[investigate(query, sub_question) for sub_question in sub_questions],
+        *[ctx.run(investigate, query, sub_question) for sub_question in sub_questions],
         return_exceptions=True,
     )
 
@@ -231,7 +231,7 @@ async def research_agent(query: str) -> dict:
             f"All {len(sub_questions)} research branches failed for: {query}"
         )
 
-    report = await synthesize(query, branches)
+    report = await ctx.run(synthesize, query, branches)
     report["sub_questions"] = sub_questions
     report["branches_completed"] = len(branches)
     report["branches_failed"] = len(outcomes) - len(branches)
@@ -241,7 +241,7 @@ async def research_agent(query: str) -> dict:
 
 
 @app.task(timeout=60)
-def plan_research(query: str) -> list[str]:
+def plan_research(ctx: TaskContext, query: str) -> list[str]:
     """Split the question into independent, parallelizable sub-questions."""
     claude = anthropic.Anthropic()
 
@@ -262,7 +262,7 @@ def plan_research(query: str) -> list[str]:
     timeout=300,
     retry=Retry(max_retries=3, wait_duration_ms=5000, backoff_scaling=2.0),
 )
-def investigate(query: str, sub_question: str) -> dict:
+def investigate(ctx: TaskContext, query: str, sub_question: str) -> dict:
     """Research one sub-question with a multi-turn Claude tool loop.
 
     This is the branch body of the fan-out. It runs the same adaptive
@@ -330,7 +330,7 @@ def investigate(query: str, sub_question: str) -> dict:
 
 
 @app.task(timeout=120)
-def synthesize(query: str, branches: list[dict]) -> dict:
+def synthesize(ctx: TaskContext, query: str, branches: list[dict]) -> dict:
     """Merge parallel branch findings into one reconciled report."""
     claude = anthropic.Anthropic()
 

@@ -27,7 +27,7 @@ services:
         sync: false
       # Optional: override the default Claude model
       # - key: CLAUDE_MODEL
-      #   value: claude-sonnet-4-20250514
+      #   value: claude-sonnet-5
       # Optional: override the default Parallel search mode (turbo | fast | advanced)
       # - key: PARALLEL_SEARCH_MODE
       #   value: fast

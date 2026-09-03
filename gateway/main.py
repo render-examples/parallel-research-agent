@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-from render_sdk import Render
+from render import Render
 
 app = FastAPI(
     title="Parallel Research Agent",
@@ -60,6 +60,26 @@ class RunStatus(BaseModel):
     result: dict | None = None
 
 
+_TERMINAL_OK = {"completed", "succeeded", "success"}
+_TERMINAL_FAILED = {"failed", "errored", "error", "cancelled", "canceled"}
+
+
+def _normalize_status(raw) -> str:
+    """Collapse the SDK's run status onto the values the demo UI polls for.
+
+    The status may arrive as a plain string or an enum depending on SDK
+    version, so unwrap it before comparing.
+    """
+    value = getattr(raw, "value", raw)
+    value = str(value).lower().rsplit(".", 1)[-1]
+
+    if value in _TERMINAL_OK:
+        return "completed"
+    if value in _TERMINAL_FAILED:
+        return "failed"
+    return value
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -94,10 +114,11 @@ async def start_research(req: ResearchRequest):
     client = Render(api_key=RENDER_API_KEY)
 
     try:
-        run = client.workflows.start_task_run(
-            workflow_slug=WORKFLOW_SLUG,
-            task_name="research_agent",
-            input={"query": req.query},
+        # Task identifier is "{workflow-slug}/{task-name}"; the input dict maps
+        # to the task's named arguments (ctx is supplied by the runtime).
+        run = client.workflows.start_task(
+            f"{WORKFLOW_SLUG}/research_agent",
+            {"query": req.query},
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to dispatch run: {exc}")
@@ -115,16 +136,19 @@ async def get_research(run_id: str):
     client = Render(api_key=RENDER_API_KEY)
 
     try:
-        run = client.workflows.get_task_run(run_id=run_id)
+        run = client.workflows.get_task_run(run_id)
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"Run not found: {exc}")
 
+    status = _normalize_status(run.status)
+
     result = None
-    if run.status == "completed" and run.output:
-        result = run.output
+    if status == "completed":
+        results = getattr(run, "results", None)
+        result = results if isinstance(results, dict) else None
 
     return RunStatus(
         run_id=run.id,
-        status=run.status,
+        status=status,
         result=result,
     )
