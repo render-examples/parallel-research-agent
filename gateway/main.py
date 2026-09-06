@@ -10,9 +10,11 @@ A lightweight FastAPI app that:
 from __future__ import annotations
 
 import os
+import time
+from collections import defaultdict
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from render import Render
@@ -29,6 +31,18 @@ RENDER_API_KEY = os.environ.get("RENDER_API_KEY", "")
 # Point at the local task server (default http://localhost:8120) to develop
 # against `render workflows dev` instead of the hosted API.
 RENDER_API_URL = os.environ.get("RENDER_API_URL", "https://api.render.com")
+
+# --- Auth & rate limiting -------------------------------------------------
+# Set API_SECRET to require an Authorization: Bearer <secret> header.
+# Leave unset to allow unauthenticated access (local dev only).
+API_SECRET = os.environ.get("API_SECRET", "")
+
+# Per-IP submission limit. Each IP can start at most MAX_RUNS_PER_WINDOW
+# runs within RATE_WINDOW_SECONDS. Resets on a rolling window.
+MAX_RUNS_PER_WINDOW = int(os.environ.get("MAX_RUNS_PER_WINDOW", "10"))
+RATE_WINDOW_SECONDS = int(os.environ.get("RATE_WINDOW_SECONDS", "3600"))
+
+_run_log: dict[str, list[float]] = defaultdict(list)
 
 
 def _client() -> Render:
@@ -179,8 +193,14 @@ async def health():
 
 
 @app.post("/research", response_model=ResearchResponse)
-async def start_research(req: ResearchRequest):
+async def start_research(req: ResearchRequest, request: Request):
     """Dispatch a research_agent workflow run."""
+    # --- Auth check ---
+    if API_SECRET:
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {API_SECRET}":
+            raise HTTPException(status_code=401, detail="Invalid or missing API secret.")
+
     if not WORKFLOW_SLUG:
         raise HTTPException(
             status_code=503,
@@ -189,6 +209,21 @@ async def start_research(req: ResearchRequest):
                 "in the Render Dashboard and set this env var to its slug."
             ),
         )
+
+    # --- Rate limit ---
+    ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    cutoff = now - RATE_WINDOW_SECONDS
+    _run_log[ip] = [t for t in _run_log[ip] if t > cutoff]
+    if len(_run_log[ip]) >= MAX_RUNS_PER_WINDOW:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Rate limit: max {MAX_RUNS_PER_WINDOW} runs per "
+                f"{RATE_WINDOW_SECONDS // 60} minutes. Try again later."
+            ),
+        )
+    _run_log[ip].append(now)
 
     client = _client()
 

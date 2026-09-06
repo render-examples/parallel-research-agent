@@ -25,6 +25,10 @@ services:
       # Workflow slug — set after creating the Workflow service (step 4)
       - key: RENDER_WORKFLOW_SLUG
         sync: false
+      # Secret for the Authorization: Bearer header.
+      # Generate one with `openssl rand -hex 32`. Requests without it are rejected.
+      - key: API_SECRET
+        generateValue: true
       # Optional: override the default Claude model
       # - key: CLAUDE_MODEL
       #   value: claude-sonnet-5

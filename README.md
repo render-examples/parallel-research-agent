@@ -94,7 +94,7 @@ curl -X POST https://your-gateway.onrender.com/research \
 curl https://your-gateway.onrender.com/research/RUN_ID_HERE
 ```
 
-A typical research run takes 40–70 seconds and costs about $0.45.
+A typical research run takes 40–70 seconds and costs about $0.33.
 
 ## Repo structure
 
@@ -154,11 +154,11 @@ Re: [Parallel's docs](https://docs.parallel.ai/integrations/mcp/programmatic-use
 
 ### Change the search quality
 
-The agent uses Parallel's `fast` search mode (~700ms, balanced quality). Override via env var:
+The agent uses Parallel's `fast` search mode (~700ms, balanced quality). All modes cost the same ($1 per 1,000 requests), so mode choice is purely about quality vs latency. Override via env var:
 
 ```
 PARALLEL_SEARCH_MODE=advanced    # ~3s, highest quality
-PARALLEL_SEARCH_MODE=turbo       # ~250ms, cheapest
+PARALLEL_SEARCH_MODE=turbo       # ~250ms, same price, lower quality
 ```
 
 ### Change the agent's specialty
@@ -211,32 +211,34 @@ pip install -r requirements.txt
 
 # Set env vars
 cp .env.example .env
-# Edit .env with your API keys
+# Edit .env with your API keys (leave API_SECRET empty for local dev)
 
-# Run the workflow locally (requires Render CLI)
-render workflows dev -- python -m workflow.main
+# Run the workflow locally (requires Render CLI 2.11.0+)
+render workflows dev -- .venv/bin/python -m workflow.main
 
-# In another terminal, start the gateway
-uvicorn gateway.main:app --reload --port 8000
+# In another terminal, start the gateway pointed at the local workflow server
+set -a && source .env && set +a
+RENDER_API_URL=http://localhost:8120 RENDER_WORKFLOW_SLUG=local \
+  .venv/bin/uvicorn gateway.main:app --reload --port 8000
 ```
 
 ## How much does a run cost?
 
-Assuming the default fan-out of 5 branches:
+Assuming the default fan-out of 4 branches:
 
 | Component | Per run |
 |---|---|
 | `plan_research` (Haiku, ~1K tokens) | ~$0.001 |
-| Parallel Search (~2 calls × 5 branches, fast mode) | ~$0.05 |
-| Parallel Extract (~1-2 calls × 5 branches) | ~$0.04 |
-| `investigate` (Sonnet, ~12K tokens × 5 branches) | ~$0.30 |
+| Parallel Search (~2 calls × 4 branches = 8 requests at $0.001/req) | ~$0.008 |
+| Parallel Extract (~1-2 calls × 4 branches ≈ 8 URLs at $0.001/URL) | ~$0.008 |
+| `investigate` (Sonnet, ~12K tokens × 4 branches) | ~$0.24 |
 | `synthesize` (Sonnet, ~15K tokens) | ~$0.08 |
-| Render compute (7 runs, ~40s each, Starter plan) | ~$0.004 |
-| **Total** | **~$0.45** |
+| Render compute (6 runs, ~40s each, Starter plan) | ~$0.003 |
+| **Total** | **~$0.33** |
 
-Fanning out costs roughly 4× what a single sequential loop costs, and almost all of that is Anthropic tokens — you're running five research agents instead of one. What you buy is breadth per run, isolated retries, and wall-clock time that tracks the slowest branch instead of the sum of all of them.
+Almost all of that is Anthropic tokens. Parallel Search and Extract are a rounding error at $1 per 1,000 requests. What you're paying for with the fan-out is breadth — more branches means more angles covered — and the main cost lever is `MAX_SUB_QUESTIONS` and the Claude model choice.
 
-If cost matters more than depth, the cheapest lever is `PARALLEL_SEARCH_MODE=turbo` combined with a lower `MAX_SUB_QUESTIONS`. Dropping to 3 branches cuts the total to roughly $0.28.
+Dropping to 3 branches cuts the total to roughly $0.25. Swapping to Haiku for `investigate` would cut it further to around $0.05, at the cost of less thorough research per branch.
 
 ## License
 

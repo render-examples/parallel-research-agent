@@ -8,7 +8,6 @@ signal per token — Claude needs the content, not the JSON scaffolding.
 from __future__ import annotations
 
 MAX_EXCERPT_CHARS = 1500
-MAX_EXTRACT_CHARS = 3000
 
 
 def format_search_results(search_response) -> str:
@@ -54,8 +53,9 @@ def format_extract_results(extract_response) -> str:
         <markdown excerpts>
 
     Extract returns `excerpts` (a list of markdown strings aligned to the
-    objective) and, only when explicitly requested, `full_content`. Prefer
-    the excerpts: they're already scoped to what the agent asked for.
+    objective) and, only when explicitly requested, `full_content`. The
+    content budget is set in the API request via `max_chars_total`, so
+    we don't truncate here.
     """
     sections: list[str] = []
 
@@ -73,11 +73,7 @@ def format_extract_results(extract_response) -> str:
             sections.append(f"=== Page: {header} ===\n[no content returned]")
             continue
 
-        truncated = content[:MAX_EXTRACT_CHARS]
-        if len(content) > MAX_EXTRACT_CHARS:
-            truncated += "\n\n[... content truncated]"
-
-        sections.append(f"=== Page: {header} ===\n{truncated}")
+        sections.append(f"=== Page: {header} ===\n{content}")
 
     # Per-URL failures come back in `errors` rather than raising, so surface
     # them — otherwise the agent silently treats a dead URL as a dead end.

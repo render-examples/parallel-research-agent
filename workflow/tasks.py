@@ -68,10 +68,10 @@ TOOLS = [
     {
         "name": "parallel_extract",
         "description": (
-            "Extract clean, readable content from specific URLs. Use this "
-            "after searching to read full articles, documentation, or "
-            "reports that looked promising in the search excerpts. Handles "
-            "JavaScript-rendered pages and PDFs."
+            "Extract focused excerpts from specific URLs. Use this only "
+            "when search results don't contain enough detail — for example, "
+            "to read a specific section of an article or verify a claim in "
+            "context. Handles JavaScript-rendered pages and PDFs."
         ),
         "input_schema": {
             "type": "object",
@@ -155,6 +155,7 @@ MAX_SUB_QUESTIONS = 5
 CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
 PLANNER_MODEL = os.getenv("PLANNER_MODEL", "claude-haiku-4-5-20251001")
 SEARCH_MODE = os.getenv("PARALLEL_SEARCH_MODE", "fast")
+EXTRACT_MAX_CHARS = int(os.getenv("PARALLEL_EXTRACT_MAX_CHARS", "6000"))
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +178,7 @@ def _execute_tool(parallel: Parallel, name: str, input_data: dict) -> str:
         result = parallel.extract(
             urls=urls,
             objective=input_data.get("objective", ""),
+            max_chars_total=EXTRACT_MAX_CHARS,
         )
         return format_extract_results(result)
 
@@ -268,15 +270,21 @@ async def research_agent(ctx: TaskContext, query: str) -> dict:
     # A branch that exhausted its retries shouldn't sink the whole run —
     # synthesize whatever came back and report the shortfall.
     branches = [outcome for outcome in outcomes if isinstance(outcome, dict)]
+    failed_questions = [
+        sub_questions[i]
+        for i, outcome in enumerate(outcomes)
+        if not isinstance(outcome, dict)
+    ]
     if not branches:
         raise RuntimeError(
             f"All {len(sub_questions)} research branches failed for: {query}"
         )
 
-    report = await ctx.run(synthesize, query, branches)
+    report = await ctx.run(synthesize, query, branches, failed_questions)
     report["sub_questions"] = sub_questions
     report["branches_completed"] = len(branches)
-    report["branches_failed"] = len(outcomes) - len(branches)
+    report["branches_failed"] = len(failed_questions)
+    report["failed_questions"] = failed_questions
     report["tool_calls_made"] = sum(branch["tool_calls"] for branch in branches)
     report["agent_turns"] = sum(branch["turns"] for branch in branches)
     return report
@@ -377,7 +385,12 @@ def investigate(ctx: TaskContext, query: str, sub_question: str) -> dict:
 
 
 @app.task(timeout_seconds=120)
-def synthesize(ctx: TaskContext, query: str, branches: list[dict]) -> dict:
+def synthesize(
+    ctx: TaskContext,
+    query: str,
+    branches: list[dict],
+    failed_questions: list[str] | None = None,
+) -> dict:
     """Merge parallel branch findings into one reconciled report."""
     claude = anthropic.Anthropic()
 
@@ -386,6 +399,16 @@ def synthesize(ctx: TaskContext, query: str, branches: list[dict]) -> dict:
         f"{branch['findings'] or '(no findings returned)'}"
         for i, branch in enumerate(branches, 1)
     )
+
+    gaps = ""
+    if failed_questions:
+        gap_list = "\n".join(f"- {q}" for q in failed_questions)
+        gaps = (
+            f"\n\nThe following sub-questions could not be investigated "
+            f"(their research branches failed):\n{gap_list}\n"
+            f"Note these gaps explicitly in the report so the reader "
+            f"knows what the report does not cover."
+        )
 
     response = claude.messages.create(
         model=CLAUDE_MODEL,
@@ -397,6 +420,7 @@ def synthesize(ctx: TaskContext, query: str, branches: list[dict]) -> dict:
                 "content": (
                     f"Original research question: {query}\n\n"
                     f"Findings from {len(branches)} parallel analysts:\n\n{briefs}"
+                    f"{gaps}"
                 ),
             }
         ],
