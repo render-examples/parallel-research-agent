@@ -1,8 +1,8 @@
-"""Format Parallel API responses for Claude's context window.
+"""Format Parallel API responses for the LLM's context window.
 
 These helpers convert raw Parallel Search and Extract results into compact
 text that fits efficiently inside a tool_result block. The goal is maximum
-signal per token — Claude needs the content, not the JSON scaffolding.
+signal per token — the LLM needs the content, not the JSON scaffolding.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ def format_search_results(search_response) -> str:
         Published: 2026-01-15 (if available)
         Excerpt: ...
 
-    This format gives Claude structured references it can cite in the
+    This format gives the model structured references it can cite in the
     final report while keeping token count reasonable.
     """
     lines: list[str] = []

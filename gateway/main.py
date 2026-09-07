@@ -22,7 +22,7 @@ from render.client import ListTaskRunsParams
 
 app = FastAPI(
     title="Parallel Research Agent",
-    description="Deep web research powered by Parallel Search, Claude, and Render Workflows.",
+    description="Deep web research powered by Parallel Search, LiteLLM, and Render Workflows.",
     version="0.1.0",
 )
 

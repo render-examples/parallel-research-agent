@@ -4,7 +4,7 @@ Four tasks, arranged as a fan-out / fan-in pipeline:
 
   research_agent  — orchestrator: plans, fans out, fans in
   plan_research   — splits the question into independent sub-questions
-  investigate     — Claude tool-use loop over Parallel Search and Extract
+  investigate     — LLM tool-use loop over Parallel Search and Extract
   synthesize      — reconciles branch findings into one cited report
 
 Each `investigate` branch runs as its own workflow run on its own instance.
@@ -19,7 +19,7 @@ import json
 import os
 import re
 
-import anthropic
+from litellm import completion
 from parallel import Parallel
 from render import Retry, TaskContext, Workflows
 
@@ -31,65 +31,71 @@ app = Workflows(
 )
 
 # ---------------------------------------------------------------------------
-# Tool definitions — these describe the Parallel APIs to Claude
+# Tool definitions — OpenAI function-calling format 
 # ---------------------------------------------------------------------------
 
 TOOLS = [
     {
-        "name": "parallel_search",
-        "description": (
-            "Search the live web for information. Returns ranked excerpts "
-            "from relevant pages, optimized for LLM consumption. Use this "
-            "to find facts, sources, and leads. You can call it multiple "
-            "times with different queries to triangulate a topic."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "objective": {
-                    "type": "string",
-                    "description": (
-                        "A natural-language description of what you are "
-                        "trying to find. Be specific about the angle."
-                    ),
+        "type": "function",
+        "function": {
+            "name": "parallel_search",
+            "description": (
+                "Search the live web for information. Returns ranked excerpts "
+                "from relevant pages, optimized for LLM consumption. Use this "
+                "to find facts, sources, and leads. You can call it multiple "
+                "times with different queries to triangulate a topic."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "objective": {
+                        "type": "string",
+                        "description": (
+                            "A natural-language description of what you are "
+                            "trying to find. Be specific about the angle."
+                        ),
+                    },
+                    "search_queries": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "2-4 keyword search queries. Each should target "
+                            "a different facet of the objective."
+                        ),
+                    },
                 },
-                "search_queries": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "2-4 keyword search queries. Each should target "
-                        "a different facet of the objective."
-                    ),
-                },
+                "required": ["objective", "search_queries"],
             },
-            "required": ["objective", "search_queries"],
         },
     },
     {
-        "name": "parallel_extract",
-        "description": (
-            "Extract focused excerpts from specific URLs. Use this only "
-            "when search results don't contain enough detail — for example, "
-            "to read a specific section of an article or verify a claim in "
-            "context. Handles JavaScript-rendered pages and PDFs."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "urls": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "URLs to extract content from (max 5).",
+        "type": "function",
+        "function": {
+            "name": "parallel_extract",
+            "description": (
+                "Extract focused excerpts from specific URLs. Use this only "
+                "when search results don't contain enough detail — for example, "
+                "to read a specific section of an article or verify a claim in "
+                "context. Handles JavaScript-rendered pages and PDFs."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "urls": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "URLs to extract content from (max 5).",
+                    },
+                    "objective": {
+                        "type": "string",
+                        "description": (
+                            "What to focus on when extracting. Helps Parallel "
+                            "prioritize relevant sections."
+                        ),
+                    },
                 },
-                "objective": {
-                    "type": "string",
-                    "description": (
-                        "What to focus on when extracting. Helps Parallel "
-                        "prioritize relevant sections."
-                    ),
-                },
+                "required": ["urls"],
             },
-            "required": ["urls"],
         },
     },
 ]
@@ -152,8 +158,10 @@ Output only the report.\
 
 MAX_AGENT_TURNS = 6
 MAX_SUB_QUESTIONS = 5
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
-PLANNER_MODEL = os.getenv("PLANNER_MODEL", "claude-haiku-4-5-20251001")
+# LiteLLM model strings use a provider prefix: anthropic/, openai/, bedrock/, etc.
+# Users swap providers by changing these env vars and setting the matching API key.
+LLM_MODEL = os.getenv("LLM_MODEL", "anthropic/claude-sonnet-5")
+PLANNER_MODEL = os.getenv("PLANNER_MODEL", "anthropic/claude-haiku-4-5-20251001")
 SEARCH_MODE = os.getenv("PARALLEL_SEARCH_MODE", "fast")
 EXTRACT_MAX_CHARS = int(os.getenv("PARALLEL_EXTRACT_MAX_CHARS", "6000"))
 
@@ -186,43 +194,33 @@ def _execute_tool(parallel: Parallel, name: str, input_data: dict) -> str:
 
 
 def _text_of(response) -> str:
-    """Concatenate the text blocks of a Claude response."""
-    return "\n".join(
-        block.text for block in response.content if block.type == "text"
-    )
+    """Extract the text content from a LiteLLM/OpenAI-format response."""
+    return response.choices[0].message.content or ""
 
 
-def _write_up(claude: anthropic.Anthropic, messages: list[dict]) -> str:
+def _write_up(messages: list[dict]) -> str:
     """Force a write-up from a branch that ran out of research turns.
 
     Without this a branch that spends every turn calling tools returns empty
     findings — it burns the budget and contributes nothing to synthesis. The
     call omits `tools` so the only move left is to answer.
     """
-    nudge = {
-        "type": "text",
-        "text": (
-            "You are out of research turns. Write up your findings now, "
-            "using only what you have already gathered and following your "
-            "output instructions. Do not request more tools."
-        ),
-    }
+    messages = [
+        *messages,
+        {
+            "role": "user",
+            "content": (
+                "You are out of research turns. Write up your findings now, "
+                "using only what you have already gathered and following your "
+                "output instructions. Do not request more tools."
+            ),
+        },
+    ]
 
-    # Anthropic requires tool_result blocks to lead their message, so append
-    # the nudge to the trailing user turn rather than starting a new one.
-    last = messages[-1] if messages else None
-    if last and last["role"] == "user" and isinstance(last["content"], list):
-        messages = messages[:-1] + [
-            {"role": "user", "content": [*last["content"], nudge]}
-        ]
-    else:
-        messages = [*messages, {"role": "user", "content": [nudge]}]
-
-    response = claude.messages.create(
-        model=CLAUDE_MODEL,
+    response = completion(
+        model=LLM_MODEL,
         max_tokens=4096,
-        system=RESEARCH_SYSTEM_PROMPT,
-        messages=messages,
+        messages=[{"role": "system", "content": RESEARCH_SYSTEM_PROMPT}, *messages],
     )
     return _text_of(response)
 
@@ -293,13 +291,13 @@ async def research_agent(ctx: TaskContext, query: str) -> dict:
 @app.task(timeout_seconds=60)
 def plan_research(ctx: TaskContext, query: str) -> list[str]:
     """Split the question into independent, parallelizable sub-questions."""
-    claude = anthropic.Anthropic()
-
-    response = claude.messages.create(
+    response = completion(
         model=PLANNER_MODEL,
         max_tokens=1024,
-        system=PLANNER_PROMPT,
-        messages=[{"role": "user", "content": query}],
+        messages=[
+            {"role": "system", "content": PLANNER_PROMPT},
+            {"role": "user", "content": query},
+        ],
     )
 
     return _parse_sub_questions(_text_of(response), fallback=query)
@@ -310,23 +308,23 @@ def plan_research(ctx: TaskContext, query: str) -> list[str]:
     retry=Retry(max_retries=3, wait_duration_ms=5000, backoff_scaling=2.0),
 )
 def investigate(ctx: TaskContext, query: str, sub_question: str) -> dict:
-    """Research one sub-question with a multi-turn Claude tool loop.
+    """Research one sub-question with a multi-turn LLM tool loop.
 
     This is the branch body of the fan-out. It runs the same adaptive
     search-read-follow-up loop over Parallel Search and Extract, scoped to
     a single facet of the question.
     """
-    claude = anthropic.Anthropic()
     parallel = Parallel()
 
     messages = [
+        {"role": "system", "content": RESEARCH_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": (
                 f"Overall research question: {query}\n\n"
                 f"Your assigned sub-question: {sub_question}"
             ),
-        }
+        },
     ]
     findings = ""
     tool_calls = 0
@@ -334,46 +332,44 @@ def investigate(ctx: TaskContext, query: str, sub_question: str) -> dict:
 
     for turn in range(MAX_AGENT_TURNS):
         turns = turn + 1
-        response = claude.messages.create(
-            model=CLAUDE_MODEL,
+        response = completion(
+            model=LLM_MODEL,
             max_tokens=4096,
-            system=RESEARCH_SYSTEM_PROMPT,
             tools=TOOLS,
             messages=messages,
         )
 
-        # Claude finished — no more tool calls
-        if response.stop_reason == "end_turn":
-            findings = _text_of(response)
+        choice = response.choices[0]
+
+        # Model finished — no more tool calls
+        if choice.finish_reason != "tool_calls":
+            findings = choice.message.content or ""
             break
 
-        messages.append({"role": "assistant", "content": response.content})
-        tool_results = []
+        # Process tool calls
+        messages.append(choice.message.model_dump())
+        has_results = False
 
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-
+        for tc in choice.message.tool_calls or []:
             tool_calls += 1
-            output = _execute_tool(parallel, block.name, block.input)
-            tool_results.append(
+            args = json.loads(tc.function.arguments)
+            output = _execute_tool(parallel, tc.function.name, args)
+            messages.append(
                 {
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
+                    "role": "tool",
+                    "tool_call_id": tc.id,
                     "content": output,
                 }
             )
+            has_results = True
 
-        # Claude stopped for some other reason (hitting max_tokens, say)
-        # without requesting a tool. Sending an empty user turn back is a
-        # 400, so stop here and let the write-up below salvage the work.
-        if not tool_results:
+        # Model stopped without requesting tools (e.g. hit max_tokens).
+        # Don't send an empty turn — let the write-up below salvage.
+        if not has_results:
             break
 
-        messages.append({"role": "user", "content": tool_results})
-
     if not findings:
-        findings = _write_up(claude, messages)
+        findings = _write_up(messages)
         turns += 1
 
     return {
@@ -392,8 +388,6 @@ def synthesize(
     failed_questions: list[str] | None = None,
 ) -> dict:
     """Merge parallel branch findings into one reconciled report."""
-    claude = anthropic.Anthropic()
-
     briefs = "\n\n".join(
         f"--- Sub-question {i}: {branch['sub_question']} ---\n"
         f"{branch['findings'] or '(no findings returned)'}"
@@ -410,11 +404,11 @@ def synthesize(
             f"knows what the report does not cover."
         )
 
-    response = claude.messages.create(
-        model=CLAUDE_MODEL,
+    response = completion(
+        model=LLM_MODEL,
         max_tokens=8192,
-        system=SYNTHESIS_PROMPT,
         messages=[
+            {"role": "system", "content": SYNTHESIS_PROMPT},
             {
                 "role": "user",
                 "content": (
@@ -422,7 +416,7 @@ def synthesize(
                     f"Findings from {len(branches)} parallel analysts:\n\n{briefs}"
                     f"{gaps}"
                 ),
-            }
+            },
         ],
     )
 

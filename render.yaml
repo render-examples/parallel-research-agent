@@ -15,9 +15,6 @@ services:
       # Parallel API key — get one free at https://platform.parallel.ai
       - key: PARALLEL_API_KEY
         sync: false
-      # Anthropic API key — https://console.anthropic.com
-      - key: ANTHROPIC_API_KEY
-        sync: false
       # Render API key — https://render.com/docs/api-keys
       # Used by the gateway to dispatch workflow runs
       - key: RENDER_API_KEY
@@ -29,9 +26,14 @@ services:
       # Generate one with `openssl rand -hex 32`. Requests without it are rejected.
       - key: API_SECRET
         generateValue: true
-      # Optional: override the default Claude model
-      # - key: CLAUDE_MODEL
-      #   value: claude-sonnet-5
+      # LLM provider API key — set the one matching your chosen provider.
+      # Default is Anthropic (claude-sonnet-5). Swap to OpenAI by setting
+      # OPENAI_API_KEY and LLM_MODEL=openai/gpt-5 instead.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Optional: override the default LLM model (LiteLLM format: provider/model)
+      # - key: LLM_MODEL
+      #   value: anthropic/claude-sonnet-5
       # Optional: override the default Parallel search mode (turbo | fast | advanced)
       # - key: PARALLEL_SEARCH_MODE
       #   value: fast
