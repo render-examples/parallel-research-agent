@@ -314,6 +314,9 @@ async def get_research(run_id: str):
     result = None
     if status == "completed":
         results = getattr(run, "results", None)
+        # Render wraps the task's single return value in a results list.
+        if isinstance(results, list) and len(results) == 1:
+            results = results[0]
         result = results if isinstance(results, dict) else None
 
     return RunStatus(
